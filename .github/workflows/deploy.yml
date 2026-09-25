@@ -40,6 +40,9 @@ jobs:
     environment: production
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
       - uses: aws-actions/setup-sam@v2
       - name: Authenticate with AWS using OIDC
         uses: aws-actions/configure-aws-credentials@v4

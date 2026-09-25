@@ -1,0 +1,49 @@
+{
+  "Comment": "Final Project - Event-driven order processing with AI",
+  "StartAt": "ValidateOrder",
+  "States": {
+    "ValidateOrder": {
+      "Type": "Task",
+      "Resource": "${ValidateOrderArn}",
+      "Next": "AnalyzeOrderAI",
+      "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2}],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SendToDLQ"}]
+    },
+    "AnalyzeOrderAI": {
+      "Type": "Task",
+      "Resource": "${AnalyzeOrderAIArn}",
+      "Next": "ProcessOrder",
+      "Retry": [{"ErrorEquals": ["ClientError", "Lambda.ServiceException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2}],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SendToDLQ"}]
+    },
+    "ProcessOrder": {
+      "Type": "Task",
+      "Resource": "${ProcessOrderArn}",
+      "Next": "FinishOrder",
+      "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2}],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SendToDLQ"}]
+    },
+    "FinishOrder": {
+      "Type": "Task",
+      "Resource": "${FinishOrderArn}",
+      "Next": "NotifyOrder",
+      "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.AWSLambdaException", "Lambda.SdkClientException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2}],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SendToDLQ"}]
+    },
+    "NotifyOrder": {
+      "Type": "Task",
+      "Resource": "${NotifyOrderArn}",
+      "Next": "OrderCompleted",
+      "Retry": [{"ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"], "IntervalSeconds": 2, "MaxAttempts": 3, "BackoffRate": 2}],
+      "Catch": [{"ErrorEquals": ["States.ALL"], "ResultPath": "$.error", "Next": "SendToDLQ"}]
+    },
+    "SendToDLQ": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::sqs:sendMessage",
+      "Parameters": {"QueueUrl": "${OrdersDLQUrl}", "MessageBody.$": "States.JsonToString($)"},
+      "Next": "OrderFailed"
+    },
+    "OrderCompleted": {"Type": "Succeed"},
+    "OrderFailed": {"Type": "Fail", "Error": "OrderProcessingFailed", "Cause": "Order processing failed after retries"}
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "widgets": [
+    {
+      "type": "metric",
+      "x": 0,
+      "y": 0,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "Pedidos processados",
+        "view": "timeSeries",
+        "region": "us-east-1",
+        "metrics": [
+          [ "Checkpoint4/OrderProcessing", "OrdersStarted", "Service", "StartOrder" ],
+          [ ".", "OrdersValidated", "Service", "ValidateOrder" ],
+          [ ".", "OrdersProcessed", "Service", "ProcessOrder" ],
+          [ ".", "OrdersFinished", "Service", "FinishOrder" ],
+          [ ".", "DuplicateOrders", "Service", "ProcessOrder" ]
+        ],
+        "period": 300,
+        "stat": "Sum"
+      }
+    },
+    {
+      "type": "metric",
+      "x": 12,
+      "y": 0,
+      "width": 12,
+      "height": 6,
+      "properties": {
+        "title": "Duração do processamento",
+        "view": "timeSeries",
+        "region": "us-east-1",
+        "metrics": [
+          [ "Checkpoint4/OrderProcessing", "ProcessingDuration", "Service", "ProcessOrder" ],
+          [ ".", "FinishDuration", "Service", "FinishOrder" ]
+        ],
+        "period": 300,
+        "stat": "Average"
+      }
+    }
+  ]
+}

@@ -1,0 +1,175 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Event-driven serverless order processing with Amazon Bedrock
+
+Parameters:
+  BedrockModelId:
+    Type: String
+    Default: amazon.nova-lite-v1:0
+    Description: Amazon Bedrock model used for operational risk classification
+
+Globals:
+  Function:
+    Runtime: python3.13
+    Architectures: [arm64]
+    Timeout: 30
+    MemorySize: 256
+    Tracing: Active
+    Environment:
+      Variables:
+        IDEMPOTENCY_TABLE: !Ref OrdersTable
+    Tags:
+      Project: cloud-serverless-final-project
+      ManagedBy: SAM
+
+Resources:
+  OrdersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: order_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: order_id
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+
+  OrdersDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      KmsMasterKeyId: alias/aws/sqs
+      MessageRetentionPeriod: 1209600
+
+  OrderEventsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      KmsMasterKeyId: alias/aws/sns
+
+  ValidateOrderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: lambdas/validate_order/lambda_function.lambda_handler
+
+  AnalyzeOrderAIFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: lambdas/analyze_order_ai/lambda_function.lambda_handler
+      Timeout: 45
+      Environment:
+        Variables:
+          BEDROCK_MODEL_ID: !Ref BedrockModelId
+      Policies:
+        - Statement:
+            - Sid: InvokeSelectedBedrockModel
+              Effect: Allow
+              Action: bedrock:InvokeModel
+              Resource: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/${BedrockModelId}
+
+  ProcessOrderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: lambdas/process_order/lambda_function.lambda_handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref OrdersTable
+
+  FinishOrderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: lambdas/finish_order/lambda_function.lambda_handler
+
+  NotifyOrderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: lambdas/notify_order/lambda_function.lambda_handler
+      Environment:
+        Variables:
+          ORDER_EVENTS_TOPIC_ARN: !Ref OrderEventsTopic
+      Policies:
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt OrderEventsTopic.TopicName
+
+  OrderProcessingStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: order-processing-final-workflow
+      Type: STANDARD
+      DefinitionUri: workflow/order-processing-workflow.json
+      DefinitionSubstitutions:
+        ValidateOrderArn: !GetAtt ValidateOrderFunction.Arn
+        AnalyzeOrderAIArn: !GetAtt AnalyzeOrderAIFunction.Arn
+        ProcessOrderArn: !GetAtt ProcessOrderFunction.Arn
+        FinishOrderArn: !GetAtt FinishOrderFunction.Arn
+        NotifyOrderArn: !GetAtt NotifyOrderFunction.Arn
+        OrdersDLQUrl: !Ref OrdersDLQ
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ValidateOrderFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref AnalyzeOrderAIFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ProcessOrderFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref FinishOrderFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref NotifyOrderFunction
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt OrdersDLQ.QueueName
+      Tracing:
+        Enabled: true
+
+  StartOrderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: .
+      Handler: lambdas/start_order/lambda_function.lambda_handler
+      Environment:
+        Variables:
+          STATE_MACHINE_ARN: !Ref OrderProcessingStateMachine
+      Policies:
+        - StepFunctionsExecutionPolicy:
+            StateMachineName: !GetAtt OrderProcessingStateMachine.Name
+      FunctionUrlConfig:
+        AuthType: AWS_IAM
+        InvokeMode: BUFFERED
+
+  OrdersDLQAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Alerts when failed orders reach the DLQ
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !GetAtt OrdersDLQ.QueueName
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  OrderProcessingDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: FinalProject-OrderProcessing
+      DashboardBody: !Sub |
+        {"widgets":[{"type":"metric","x":0,"y":0,"width":12,"height":6,"properties":{"region":"${AWS::Region}","title":"Order processing metrics","view":"timeSeries","metrics":[["FinalProject/OrderProcessing","OrdersStarted","Service","StartOrder"],[".","OrdersAnalyzedByAI",".","AnalyzeOrderAI"],[".","OrdersProcessed",".","ProcessOrder"],[".","OrderEventsPublished",".","NotifyOrder"]]}},{"type":"metric","x":12,"y":0,"width":12,"height":6,"properties":{"region":"${AWS::Region}","title":"Failures and duplicates","view":"timeSeries","metrics":[["FinalProject/OrderProcessing","AIAnalysisFailures","Service","AnalyzeOrderAI"],[".","ProcessingFailures",".","ProcessOrder"],[".","DuplicateOrders",".","ProcessOrder"]]}}]}
+
+Outputs:
+  StartOrderFunctionUrl:
+    Description: IAM-protected endpoint that starts the workflow
+    Value: !GetAtt StartOrderFunctionUrl.FunctionUrl
+  StateMachineArn:
+    Value: !Ref OrderProcessingStateMachine
+  OrderEventsTopicArn:
+    Value: !Ref OrderEventsTopic
+  DeadLetterQueueUrl:
+    Value: !Ref OrdersDLQ

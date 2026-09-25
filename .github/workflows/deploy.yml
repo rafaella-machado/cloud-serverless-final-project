@@ -1,0 +1,58 @@
+name: CI/CD - Test and deploy serverless stack
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-east-1
+  STACK_NAME: cloud-serverless-final-project
+
+jobs:
+  test:
+    name: Test and validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Unit tests
+        run: pytest -v
+      - uses: aws-actions/setup-sam@v2
+      - name: Validate SAM template
+        run: sam validate --lint
+      - name: Build application
+        run: sam build
+
+  deploy:
+    name: Deploy to AWS
+    if: github.event_name == 'push'
+    needs: test
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/setup-sam@v2
+      - name: Authenticate with AWS using OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+      - run: sam build
+      - name: Deploy infrastructure and application
+        run: >-
+          sam deploy
+          --stack-name "$STACK_NAME"
+          --region "$AWS_REGION"
+          --resolve-s3
+          --capabilities CAPABILITY_IAM
+          --no-confirm-changeset
+          --no-fail-on-empty-changeset
